@@ -214,7 +214,16 @@ Three pages of keys: letters (a digit row over QWERTY), symbols (all of ASCII's 
 ° § ¡ ¿) and accented Latin letters (à-ÿ, œ, ß, ł, č, ę, ń, ś, š, ž and their capitals).
 Every key is a character the embedded IBM Plex Sans has. `Charset::Ascii` keeps a request
 to printable ASCII: no accent page, the other symbols greyed, and a physical keyboard's
-other characters dropped.
+other characters dropped. `Charset::Digits` (a number, a PIN) is a phone's pad in a
+narrower box, with no tabs, Space or Shift (X and Y do nothing), focused on 1:
+
+```
+ [1][2][3]
+ [4][5][6]
+ [7][8][9]
+ [⌫][0][Done]
+ A Type  B Delete  LB RB Cursor  Start Done  Back Cancel
+```
 
 | Pad | Keyboard | Mouse | Does |
 |---|---|---|---|
@@ -309,7 +318,8 @@ queue the completion) the way the host's other asynchronous system calls do; the
 difference is that `onDone` runs on the drawing thread. With `maxLength` in characters, a
 UTF-16 buffer of `cchMaxText` holds the result for everything the keys type (all of it is
 in the Basic Multilingual Plane). If the game can't draw some characters (its font has
-ASCII only, say), ask for `Charset::Ascii`.
+ASCII only, say), ask for `Charset::Ascii`; for a numeric request (a game's numbers-only
+flag), `Charset::Digits`.
 
 ## API reference
 
@@ -357,7 +367,7 @@ ASCII only, say), ask for `Charset::Ascii`.
 ### `rui/keyboard.h`
 
 - `Request { title, description, initial, placeholder, maxLength (characters), maxBytes,
-  charset, onDone(optional<string>) }`, `Charset` (Any, Ascii).
+  charset, onDone(optional<string>) }`, `Charset` (Any, Ascii, Digits).
 - `Open(request)`, `Open(title, initial, maxLength, onDone)`: the drawing thread.
   `Post(request)`, `Cancel(id)`: any thread, at the next frame. Each returns or takes an `Id`.
 - `IsOpen()`, `KeyCenter(key)` (for tests).
