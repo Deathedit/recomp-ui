@@ -282,7 +282,9 @@ cmake -S test -B build -G Ninja -DRUI_TEST_IMGUI_DIR=<imgui> -DRUI_TEST_SDL_DIR=
 ninja -C build rui_selftest && build/rui_selftest build
 ```
 
-## Fonts and licences
+## Licences
+
+recomp-ui's own code is MIT (`LICENSE`).
 
 IBM Plex Sans and Mono (SIL Open Font License 1.1, unmodified) and a 22-icon subset of
 Material Symbols Rounded (Apache License 2.0), embedded at build time. `fonts/README.md` has
