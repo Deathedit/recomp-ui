@@ -3,6 +3,7 @@
 
 #include <rui/rui.h>
 #include <rui/stats.h>
+#include <rui/widgets.h>
 
 #include <cstddef>
 #include <format>
@@ -41,6 +42,18 @@ namespace rui::detail
 
     // widgets.cpp: the last input used, once a frame before the panel.
     void UpdateInputMode();
+    // A footer hint: its glyph (the pad; LB and LT bring RB and RT), else
+    // its key cap, and its label; returns its width.
+    float Hint(ImDrawList* draw, float x, float centerY, std::optional<Glyph> glyph, std::string_view key, std::string_view label);
+
+    // keyboard.cpp, on the drawing thread inside the ImGui frame. At the
+    // frame's start: Post's and Cancel's, and whether one is open (the
+    // panel's input waits then).
+    bool KeyboardFrameStart();
+    // After the panel: the keyboard's input and its window.
+    void DrawKeyboard(bool panelOpen);
+    // Shutdown's: every one shown or waiting gets nullopt.
+    void CancelKeyboards();
 
     // panel.cpp, on the drawing thread inside the ImGui frame.
     void InitPanel(const InitInfo& info);

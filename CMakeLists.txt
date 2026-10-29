@@ -49,6 +49,7 @@ add_custom_command(
 add_library(recomp_ui STATIC
     src/gate.cpp
     src/imgui_impl_plume.cpp
+    src/keyboard.cpp
     src/panel.cpp
     src/rui.cpp
     src/settings.cpp

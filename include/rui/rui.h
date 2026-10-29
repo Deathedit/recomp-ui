@@ -8,7 +8,8 @@
 // one that records the frame the swap chain presents), and so does every
 // page, hook and widget: the ImGui context is only used there. QueueEvent
 // and WantsTextInput are for the thread that pumps SDL's events; PostToast,
-// rui/gate.h and the settings' SavePending are safe from any thread.
+// rui::keyboard's Post and Cancel, rui/gate.h and the settings' SavePending
+// are safe from any thread.
 #pragma once
 
 #include <imgui.h>
@@ -142,8 +143,9 @@ namespace rui
     // The ones ImGui uses (keys, text, the mouse, focus) are kept, text
     // copied, until the next NewFrame (256 at most; the oldest go).
     void QueueEvent(const SDL_Event& event);
-    // A text field is being typed in (as of the last frame): the event
-    // thread starts SDL's text input (SDL_StartTextInput) while it's true.
+    // A text field is being typed in, or the on-screen keyboard is open (as
+    // of the last frame): the event thread starts SDL's text input
+    // (SDL_StartTextInput) while it's true.
     bool WantsTextInput();
 
     // ---- the panel ----

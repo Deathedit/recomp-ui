@@ -2,12 +2,14 @@
 
 #include <rui/gate.h>
 #include <rui/imgui_impl_plume.h>
+#include <rui/keyboard.h>
 #include <rui/settings.h>
 #include <rui/style.h>
 #include <rui/toasts.h>
 
 #include <SDL3/SDL.h>
 #include <backends/imgui_impl_sdl3.h>
+#include <imgui_internal.h>  // ImGuiContext's windowing config
 
 #include <algorithm>
 #include <atomic>
@@ -103,6 +105,12 @@ namespace rui
             stick(ImGuiKey_GamepadLStickRight, pad.leftX, false);
             stick(ImGuiKey_GamepadLStickUp, pad.leftY, false);
             stick(ImGuiKey_GamepadLStickDown, pad.leftY, true);
+            // The triggers past XInput's threshold (the keyboard's pages).
+            const auto trigger = [&](ImGuiKey key, uint8_t value) {
+                io.AddKeyAnalogEvent(key, connected && value > pad::TRIGGER_THRESHOLD, connected ? float(value) / 255.0f : 0.0f);
+            };
+            trigger(ImGuiKey_GamepadL2, pad.leftTrigger);
+            trigger(ImGuiKey_GamepadR2, pad.rightTrigger);
         }
     }
 
@@ -121,6 +129,10 @@ namespace rui
         ImGuiIO& io = ImGui::GetIO();
         io.IniFilename = nullptr;  // the panel places itself; options go to the settings file
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NoMouseCursorChange;
+        // No switching windows by holding X (or Ctrl+Tab): the on-screen
+        // keyboard keeps the focus over the panel, X being its space.
+        GImGui->ConfigNavWindowingWithGamepad = false;
+        GImGui->ConfigNavWindowingKeyNext = GImGui->ConfigNavWindowingKeyPrev = 0;
         detail::InitStyle();
         detail::InitPanel(info);
         s_readPad = info.readPad;
@@ -169,6 +181,7 @@ namespace rui
     {
         if (!s_active)
             return;
+        detail::CancelKeyboards();
         if (s_renderer)
             ImGui_ImplPlume_Shutdown();
         if (s_platform)
@@ -227,7 +240,7 @@ namespace rui
         if (!s_active)
             return;
         ImGuiIO& io = ImGui::GetIO();
-        s_wantTextInput = io.WantTextInput;  // the last frame's
+        s_wantTextInput = io.WantTextInput || keyboard::IsOpen();  // the last frame's (a physical keyboard types into it)
         {
             std::lock_guard lock(s_eventMutex);
             s_taken.assign(std::make_move_iterator(s_events.begin()), std::make_move_iterator(s_events.end()));
@@ -264,7 +277,7 @@ namespace rui
             detail::RunSettingsChanged();
         if (Visible() != wasVisible)
             detail::Log(LogKind::Event, Visible() ? "overlay open" : "overlay closed");
-        gate::SetCapture(Visible());
+        gate::SetCapture(Visible() || keyboard::IsOpen());
         settings::Update();
     }
 
