@@ -872,8 +872,8 @@ namespace rui::keyboard
             ImDrawList* draw = ImGui::GetWindowDrawList();
             const int first = draw->VtxBuffer.Size;
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            // Over the panel a lighter scrim (it's darkened already).
-            draw->AddRectFilled(viewport->Pos, ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y), panelOpen ? IM_COL32(7, 9, 12, 110) : SCRIM);
+            // Over the panel a scrim of its own: the panel behind recedes.
+            draw->AddRectFilled(viewport->Pos, ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y), panelOpen ? IM_COL32(7, 9, 12, 170) : SCRIM);
             for (int ring = 0; ring < 3; ring++)
             {
                 const float out = S(2.0f + 4.0f * float(ring));
