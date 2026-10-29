@@ -29,6 +29,13 @@
 #include <utility>
 #include <vector>
 
+// Xlib.h (plume's swap chain on Linux, included before this) defines Bool as
+// a macro, which would turn settings::Bool into nonsense. Plume undefines the
+// rest of Xlib's clashing names the same way.
+#ifdef Bool
+#undef Bool
+#endif
+
 namespace rui::settings
 {
     // "true"/"1" or "false"/"0".

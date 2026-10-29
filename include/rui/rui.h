@@ -13,6 +13,11 @@
 
 #include <imgui.h>
 #include <plume_render_interface.h>
+// Plume includes Xlib.h on Linux and undefines most of its clashing macros,
+// but not Bool (rui::settings::Bool).
+#ifdef Bool
+#undef Bool
+#endif
 
 #include <cstdint>
 #include <functional>
