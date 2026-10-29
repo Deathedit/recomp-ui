@@ -3,10 +3,12 @@
 // page's rows, a description of the focused row and a footer of button
 // hints. The toggle opens and closes it; up/down pick a row, left/right and
 // A change it, Y resets it, LB/RB (Tab) switch pages, B (Esc) closes. It
-// scales from its 1280x720 layout to the window's height.
+// scales from its 1280x720 layout to the window's height. The on-screen
+// keyboard (keyboard.cpp) draws over it and has the input while it's open.
 #include "internal.h"
 
 #include <rui/gate.h>
+#include <rui/keyboard.h>
 #include <rui/settings.h>
 #include <rui/stats.h>
 #include <rui/style.h>
@@ -57,6 +59,9 @@ namespace rui
         int s_lastFocused = -1;
         int s_descriptionLines = 2;  // the strip's, from the page's longest description
         bool s_scrollToTop = false;
+        bool s_keyboardWasOpen = false;
+        int s_cursorFrames = 0;  // the cursor shown again, frames after the keyboard closed
+        bool s_holdToggle = false;  // the keyboard was open: the chord waits for its buttons' release
 
         // SetTestScript's.
         TestScript s_test;
@@ -135,6 +140,17 @@ namespace rui
             return pressed && held;
         }
 
+        bool AnyDown(uint16_t buttons)
+        {
+            for (int bit = 0; bit < 16; bit++)
+            {
+                const ImGuiKey key = PadKey(uint16_t(1u << bit));
+                if ((buttons & (1u << bit)) != 0 && key != ImGuiKey_None && ImGui::IsKeyDown(key))
+                    return true;
+            }
+            return false;
+        }
+
         bool AnyPressed(uint16_t buttons)
         {
             for (int bit = 0; bit < 16; bit++)
@@ -146,30 +162,7 @@ namespace rui
             return false;
         }
 
-        float HintWidth(float glyphWidth, std::string_view label)
-        {
-            return glyphWidth + S(7.0f) + TextWidth(Face::Sans, 14.0f, label);
-        }
-
-        // A footer hint: its glyph (pad), key cap (keyboard) and its label.
-        float Hint(ImDrawList* draw, float x, float centerY, std::optional<Glyph> glyph, std::string_view key, std::string_view label)
-        {
-            float width = 0.0f;
-            if (CurrentInput() == InputMode::Pad && glyph)
-            {
-                if (*glyph == Glyph::LB)
-                {
-                    width = DrawGlyph(draw, Glyph::LB, x, centerY);
-                    width += S(4.0f) + DrawGlyph(draw, Glyph::RB, x + width + S(4.0f), centerY);
-                }
-                else
-                    width = DrawGlyph(draw, *glyph, x, centerY);
-            }
-            else
-                width = DrawKeyCap(draw, key, x, centerY);
-            TextMiddle(draw, Face::Sans, 14.0f, x + width + S(7.0f), centerY, TEXT_2, label);
-            return HintWidth(width, label);
-        }
+        using detail::Hint;
 
         void Footer(ImDrawList* draw, ImVec2 min, ImVec2 max)
         {
@@ -375,7 +368,9 @@ namespace rui
                 draw->VtxBuffer[i].col = Alpha(draw->VtxBuffer[i].col, alpha);
         }
 
-        void Panel()
+        // `keyboard`: the on-screen keyboard is open over it (its window has
+        // the focus).
+        void Panel(bool keyboard)
         {
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
             const float fade = std::min(s_openAge / FADE_SECONDS, 1.0f);
@@ -412,7 +407,7 @@ namespace rui
                 if (CurrentInput() != InputMode::Mouse)
                     ImGui::SetNavCursorVisible(true);
             }
-            if (!s_panelFocused)
+            if (!s_panelFocused && !keyboard)
                 ImGui::SetNextWindowFocus();  // clicks outside the panel don't take the pad's cursor away
             const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                 ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar;
@@ -671,26 +666,55 @@ namespace rui::detail
         UpdateScale(float(width), float(height), s_overlayScale);
         RunTestScript();
 
+        // The on-screen keyboard has the input while it's open (and the
+        // toggle's buttons until they're released after it closes, Back
+        // being its cancel); closed, the focus returns to the panel's row.
+        const bool keyboard = KeyboardFrameStart();
+        if (keyboard)
+            s_holdToggle = true;
+        else if (!AnyDown(s_toggleButtons))
+            s_holdToggle = false;
+        if (s_keyboardWasOpen && !keyboard)
+        {
+            s_panelFocused = false;
+            s_focusAfterOpen = true;
+            // ImGui hid the cursor while the keyboard's window had the focus
+            // (and does until the panel's has it back): shown again, a row
+            // takes A.
+            s_cursorFrames = 3;
+        }
+        s_keyboardWasOpen = keyboard;
+        if (s_cursorFrames > 0)
+        {
+            s_cursorFrames--;
+            if (CurrentInput() != InputMode::Mouse)
+                ImGui::SetNavCursorVisible(true);
+        }
+
         // The key, or the pad's chord; while the panel is open, its close
         // buttons and Escape too.
         const bool typing = ImGui::GetIO().WantTextInput;
-        if ((s_toggleKey != ImGuiKey_None && ImGui::IsKeyPressed(s_toggleKey, false)) || ChordPressed(s_toggleButtons))
-            SetVisible(!s_visible);
-        else if (s_visible && !typing && (AnyPressed(s_closeButtons) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
-            SetVisible(false);
+        if (!keyboard)
+        {
+            if ((s_toggleKey != ImGuiKey_None && ImGui::IsKeyPressed(s_toggleKey, false)) || (!s_holdToggle && ChordPressed(s_toggleButtons)))
+                SetVisible(!s_visible);
+            else if (s_visible && !typing && (AnyPressed(s_closeButtons) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
+                SetVisible(false);
+        }
 
         if (s_visible)
         {
             s_openAge += ImGui::GetIO().DeltaTime;
             const bool shift = ImGui::GetIO().KeyShift;
-            if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) || (!typing && shift && ImGui::IsKeyPressed(ImGuiKey_Tab, false)))
+            if (!keyboard && (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) || (!typing && shift && ImGui::IsKeyPressed(ImGuiKey_Tab, false))))
                 SelectPage(s_page - 1);
-            else if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) || (!typing && !shift && ImGui::IsKeyPressed(ImGuiKey_Tab, false)))
+            else if (!keyboard && (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) || (!typing && !shift && ImGui::IsKeyPressed(ImGuiKey_Tab, false))))
                 SelectPage(s_page + 1);
-            Panel();
+            Panel(keyboard);
         }
+        DrawKeyboard(s_visible);
         DrawHud();
-        DrawToasts(s_visible);
+        DrawToasts(s_visible || keyboard::IsOpen());
         for (const auto& hook : s_foregroundHooks)
             hook(s_visible);
     }

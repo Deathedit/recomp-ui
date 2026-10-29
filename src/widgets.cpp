@@ -29,6 +29,14 @@ namespace rui
         RowInfo s_current;
         ImGuiID s_editing = 0;  // the text field being typed in
         bool s_focusEditor = false;
+        ImGuiID s_keyboardFor = 0;                  // the text field the on-screen keyboard types for
+        std::optional<std::string> s_keyboardText;  // its Done, for the field's next frame
+
+        // InputText's filter for a TextField's charset.
+        int AsciiOnly(ImGuiInputTextCallbackData* data)
+        {
+            return data->EventChar < 0x20 || data->EventChar >= 0x7F ? 1 : 0;
+        }
 
         // Pressed, with key repeat, on the pad, the keyboard or the left stick.
         bool Pressed(ImGuiKey dpad, ImGuiKey arrow, ImGuiKey stick)
@@ -201,6 +209,25 @@ namespace rui
 
 namespace rui::detail
 {
+    float Hint(ImDrawList* draw, float x, float centerY, std::optional<Glyph> glyph, std::string_view key, std::string_view label)
+    {
+        float width = 0.0f;
+        if (CurrentInput() == InputMode::Pad && glyph)
+        {
+            if (*glyph == Glyph::LB || *glyph == Glyph::LT)
+            {
+                width = DrawGlyph(draw, *glyph, x, centerY);
+                width += S(4.0f) + DrawGlyph(draw, *glyph == Glyph::LB ? Glyph::RB : Glyph::RT, x + width + S(4.0f), centerY);
+            }
+            else
+                width = DrawGlyph(draw, *glyph, x, centerY);
+        }
+        else
+            width = DrawKeyCap(draw, key, x, centerY);
+        TextMiddle(draw, Face::Sans, 14.0f, x + width + S(7.0f), centerY, TEXT_2, label);
+        return width + S(7.0f) + TextWidth(Face::Sans, 14.0f, label);
+    }
+
     void UpdateInputMode()
     {
         ImGuiIO& io = ImGui::GetIO();
@@ -468,7 +495,7 @@ namespace rui
         return !row.disabled && row.pressed && (!row.clicked || onButton);
     }
 
-    bool TextField(const RowSpec& spec, std::string& value, size_t maxLength, std::string_view shown)
+    bool TextField(const RowSpec& spec, std::string& value, size_t maxLength, std::string_view shown, keyboard::Charset charset)
     {
         const Row row = BeginRow(spec.label, ROW_HEIGHT, !spec.disabledWhy.empty());
         DrawLabel(row, spec);
@@ -476,13 +503,47 @@ namespace rui
         const float right = ControlRight(row), left = right - S(CONTROL_WIDTH);
         const float centerY = (row.min.y + row.max.y) * 0.5f;
         const bool editing = s_editing == row.id;
-        if (!editing && !row.disabled && row.pressed)
+        if (!editing && s_keyboardFor != row.id && !row.disabled && row.pressed)
         {
-            s_editing = row.id;
-            s_focusEditor = true;
+            if (CurrentInput() == InputMode::Pad && !row.clicked)
+            {
+                // From the pad: the on-screen keyboard.
+                keyboard::Request request;
+                request.title = std::string(spec.label);
+                request.description = std::string(spec.description);
+                request.initial = value;
+                request.placeholder = std::string(shown);
+                request.maxLength = maxLength;
+                request.maxBytes = maxLength;
+                request.charset = charset;
+                const ImGuiID id = row.id;
+                request.onDone = [id](std::optional<std::string> text) {
+                    if (s_keyboardFor != id)
+                        return;
+                    if (text)
+                        s_keyboardText = std::move(text);
+                    else
+                        s_keyboardFor = 0;
+                };
+                s_keyboardFor = row.id;
+                s_keyboardText.reset();
+                keyboard::Open(std::move(request));
+            }
+            else
+            {
+                s_editing = row.id;
+                s_focusEditor = true;
+            }
         }
 
         bool changed = false;
+        if (s_keyboardFor == row.id && s_keyboardText)
+        {
+            changed = *s_keyboardText != value;
+            value = std::move(*s_keyboardText);
+            s_keyboardText.reset();
+            s_keyboardFor = 0;
+        }
         if (s_editing == row.id)
         {
             // The field in the value's place, over the row.
@@ -495,8 +556,10 @@ namespace rui
             char buffer[64] = {};
             std::snprintf(buffer, sizeof(buffer), "%s", value.c_str());
             ImGui::PushID(int(row.id));
+            const bool ascii = charset == keyboard::Charset::Ascii;
             const bool entered = ImGui::InputText("##text", buffer, std::min(sizeof(buffer), maxLength + 1),
-                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll | (ascii ? ImGuiInputTextFlags_CallbackCharFilter : 0),
+                ascii ? AsciiOnly : nullptr);
             const bool finished = ImGui::IsItemDeactivated();
             ImGui::PopID();
             changed = value != buffer;
@@ -510,8 +573,9 @@ namespace rui
         {
             const std::string text(value.empty() ? shown : std::string_view(value));
             const float width = std::min(TextWidth(Face::Sans, LABEL_SIZE, text), right - left);
+            const bool typing = s_keyboardFor == row.id;  // on the on-screen keyboard
             TextEllipsis(draw, Face::Sans, LABEL_SIZE, ImVec2(right - S(8.0f) - width, centerY - std::round(LABEL_SIZE * Scale()) * 0.52f), right,
-                row.disabled ? TEXT_3 : row.ring ? ACCENT : value.empty() ? TEXT_2 : TEXT, text);
+                row.disabled ? TEXT_3 : row.ring || typing ? ACCENT : value.empty() ? TEXT_2 : TEXT, text);
         }
         Describe(row, spec, RowKind::Text, "", "Edit");
         return changed;
@@ -600,11 +664,21 @@ namespace rui
         }
         case Glyph::LB:
         case Glyph::RB:
+        case Glyph::LT:
+        case Glyph::RT:
+        case Glyph::Start:
+        case Glyph::Back:
         {
-            const char* text = glyph == Glyph::LB ? "LB" : "RB";
-            const float width = S(30.0f);
-            draw->AddRectFilled(ImVec2(x, centerY - S(10.0f)), ImVec2(x + width, centerY + S(10.0f)), GLYPH_BG, S(6.0f));
-            TextMiddle(draw, Face::SemiBold, 11.5f, x + (width - TextWidth(Face::SemiBold, 11.5f, text)) * 0.5f, centerY, TEXT, text);
+            // A cap with its name: the shoulders and triggers 30 wide, Start
+            // and Back as wide as theirs.
+            static constexpr const char* NAMES[] = { "LB", "RB", "LT", "RT", "Start", "Back" };
+            const int i = glyph == Glyph::LB ? 0 : glyph == Glyph::RB ? 1 : glyph == Glyph::LT ? 2 : glyph == Glyph::RT ? 3 : glyph == Glyph::Start ? 4 : 5;
+            const char* text = NAMES[i];
+            const float textWidth = TextWidth(Face::SemiBold, 11.5f, text);
+            const float width = i < 4 ? S(30.0f) : textWidth + S(14.0f);
+            const float rounding = i < 4 ? S(6.0f) : S(10.0f);
+            draw->AddRectFilled(ImVec2(x, centerY - S(10.0f)), ImVec2(x + width, centerY + S(10.0f)), GLYPH_BG, rounding);
+            TextMiddle(draw, Face::SemiBold, 11.5f, x + (width - textWidth) * 0.5f, centerY, TEXT, text);
             return width;
         }
         default:

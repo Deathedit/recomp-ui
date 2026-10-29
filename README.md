@@ -2,7 +2,8 @@
 
 An in-game overlay for the host runtime of a statically recompiled game: a settings panel
 the player opens over the game's frame, a settings file behind it, a performance HUD,
-toasts, and an input gate that keeps the game from seeing the pad while the panel is open.
+toasts, an on-screen keyboard, and an input gate that keeps the game from seeing the pad
+while the panel or the keyboard is open.
 Dear ImGui, drawn through [plume](https://github.com/renderbag/plume) on D3D12 or Vulkan.
 Pad first: everything works with a controller, the keyboard and the mouse.
 
@@ -15,6 +16,7 @@ the panel, navigation, looks, the file, the HUD and the plumbing between threads
 | Core shell | `rui/rui.h`, `rui/style.h`, `rui/widgets.h`, `rui/toasts.h` | Init and the frame's calls, the panel (header, sidebar of pages, rows, description strip, footer of hints), open/close (a key and a pad chord), pad/keyboard/mouse navigation, the look (colours, fonts, 720p-based scaling), rows and cards, toasts |
 | Settings | `rui/settings.h` | An ini file of `[section] key = value`, keys bound to the game's variables, defaults, saved half a second after a change and at exit |
 | Stats HUD | `rui/stats.h` | FPS / frame time / CPU / GPU (and a count of the host's, such as draws) in a screen corner, 1% and 0.1% lows, cards for a page |
+| On-screen keyboard | `rui/keyboard.h` | Text typed with the pad on a grid of keys (letters, symbols, accented letters), over the game or the panel; text fields open it from the pad, a host opens it for anything else (a game's own request for text) |
 | Input gate | `rui/gate.h` | A neutral pad for the game while the panel is open and until the buttons are released after it closes; the toggle chord never reaches the game |
 | Renderer backend | `rui/imgui_impl_plume.h`, `rui/imgui_impl_plume_shaders.h` | Dear ImGui on plume: one pipeline, buffers per frame in flight, textures as ImGui asks (1.92's `RendererHasTextures`) |
 
@@ -145,9 +147,9 @@ the **game's threads** (read the pad through the host's XInput functions).
 | Thread | May call |
 |---|---|
 | Any, before the overlay starts | `rui::settings` registration and `Load`, `rui::AddPage`, `rui::OnFrame`, `rui::OnForeground`, `rui::SetLog` |
-| Drawing thread | `Init`, `NewFrame`, `RecordUploads`, `Draw`, `DrawInto`, `Shutdown`, `rui::stats::*`, `PushToast`, `ShowPage`, `SetVisible`, and everything in pages and hooks (widgets, style). The ImGui context is only used here. The settings' variables belong to this thread from `Init` on, inside `rui::settings::Mutex()` (`NewFrame` holds it while pages and hooks run). |
+| Drawing thread | `Init`, `NewFrame`, `RecordUploads`, `Draw`, `DrawInto`, `Shutdown`, `rui::stats::*`, `PushToast`, `ShowPage`, `SetVisible`, `rui::keyboard::Open`, `IsOpen`, and everything in pages and hooks (widgets, style). The ImGui context is only used here. The settings' variables belong to this thread from `Init` on, inside `rui::settings::Mutex()` (`NewFrame` holds it while pages and hooks run). |
 | Event thread | `QueueEvent`, `WantsTextInput` |
-| Any | `PostToast`, `rui::gate::*`, `rui::settings::SavePending` |
+| Any | `PostToast`, `rui::keyboard::Post`, `rui::keyboard::Cancel`, `rui::gate::*`, `rui::settings::SavePending` |
 
 `ImGui_ImplSDL3_NewFrame` is never called (it would call SDL off the event thread):
 `NewFrame` sets the display size and time itself, and the mouse cursor is left alone.
@@ -185,6 +187,129 @@ void AddPages()
 
 A row bound to a registered key needs nothing more: when a frame of the panel leaves any
 registered key's value different, the framework runs the `OnChanged` hooks and saves.
+
+## The on-screen keyboard
+
+`rui/keyboard.h`: text typed with the pad on a grid of keys, for players with only a
+controller (a handheld, a couch). It draws over the game's frame or over the panel, in the
+panel's look and scale, and while it's open the input gate keeps the pad from the game as
+the panel does.
+
+```
+ Name                                         4 / 15
+ Your name, up to 15 characters.
+ ┌──────────────────────────────────────────────────┐
+ │ Ride|                                            │
+ └──────────────────────────────────────────────────┘
+              LT [ ABC ] [ #+= ] [ ÀÉ ] RT
+ [1][2][3][4][5][6][7][8][9][0]
+ [q][w][e][r][t][y][u][i][o][p]
+ [a][s][d][f][g][h][j][k][l]['] 
+ [z][x][c][v][b][n][m][,][.][-]
+ [Shift][#+=][     Space     ][ ⌫ ][Done]
+ A Type  B Delete  X Space  Y Shift  LB RB Cursor  Start Done  Back Cancel
+```
+
+Three pages of keys: letters (a digit row over QWERTY), symbols (all of ASCII's and € £ ¥ ¢
+° § ¡ ¿) and accented Latin letters (à-ÿ, œ, ß, ł, č, ę, ń, ś, š, ž and their capitals).
+Every key is a character the embedded IBM Plex Sans has. `Charset::Ascii` keeps a request
+to printable ASCII: no accent page, the other symbols greyed, and a physical keyboard's
+other characters dropped.
+
+| Pad | Keyboard | Mouse | Does |
+|---|---|---|---|
+| D-pad / left stick | - | - | move between keys (repeats when held; round at the edges) |
+| A | (typing) | click a key | type the key (Shift, the page key, Space, Backspace, Done too) |
+| B | Backspace, Delete | the Backspace key | delete before the cursor; on an empty text, cancel |
+| X | Space | the Space key | a space |
+| Y | - | the Shift key | shift the next letter; twice quickly or held: caps lock; again: off |
+| LB / RB | Left / Right, Home / End | click in the text | move the cursor |
+| LT / RT | - | a page's tab | previous / next key page |
+| Start | Enter | the Done key | done |
+| Back | Esc | - | cancel |
+
+The footer shows these for the input used last (pad, keys or mouse). A physical keyboard
+always types while it's open: `rui::WantsTextInput` is true then, so the host's SDL text
+input is on. (On some systems, Steam Deck desktop mode among them, `SDL_StartTextInput`
+also brings up the system's own on-screen keyboard; set `SDL_HINT_ENABLE_SCREEN_KEYBOARD`
+to `"0"` before `SDL_Init` to keep it away.)
+
+**Text fields use it themselves**: `TextField` opens it when the edit starts from the pad
+(A on the row), titled with the row's label and described with its description; its Done
+sets the value (the next frame, which `TextField` reports as a change, so a bound settings
+key saves). Started with Enter or a click, the field is typed in place as before.
+
+**A host opens it** for anything else, with the panel open or closed:
+
+```cpp
+rui::keyboard::Open("Server address", g_server, 64, [](std::optional<std::string> text) {
+    if (text)
+        g_server = *text;  // Done; nullopt: cancelled
+});
+
+rui::keyboard::Request request;
+request.title = "Message";
+request.description = "Sent to everyone in the lobby.";
+request.placeholder = "Say something";
+request.maxLength = 80;                         // characters
+request.maxBytes = 120;                         // and UTF-8 bytes, if the receiver counts them
+request.charset = rui::keyboard::Charset::Ascii;
+request.onDone = [](std::optional<std::string> text) { /* ... */ };
+const rui::keyboard::Id id = rui::keyboard::Post(std::move(request));  // from any thread
+rui::keyboard::Cancel(id);                                             // from any thread
+```
+
+- `Open` is for the drawing thread (in a frame or between); `Post` and `Cancel` are safe
+  from any thread and take effect at the next `NewFrame`.
+- One shows at a time; more wait their turn. Each one's `onDone` runs exactly once, on the
+  drawing thread inside `NewFrame` (the ImGui frame, `rui::settings::Mutex()` held): the
+  text on Done, `std::nullopt` on cancel, on `Cancel(id)` and at `Shutdown`. It may open
+  another.
+- The press that opens it isn't a key: input counts from its second frame. While it's
+  open the panel's own input waits (and the toggle chord until its buttons are released
+  after it closes, Back being the keyboard's cancel); afterwards the panel's focus is back
+  on its row.
+- `IsOpen()` (drawing thread). `KeyCenter(key)` gives where a key was drawn, for tests that
+  click.
+
+### Answering a game's keyboard request
+
+A console game that asks the system for text (on the Xbox 360, `XamShowKeyboardUI`: a
+title, a description, the default text, a buffer of `cchMaxText` UTF-16 characters, and an
+`XOVERLAPPED` or a blocking call) can get it from this keyboard. The request is
+asynchronous on both sides, so nothing waits on the drawing thread:
+
+```cpp
+// The game's thread, in the host's implementation of the system call:
+uint32_t ShowKeyboard(const std::u16string& title, const std::u16string& description, const std::u16string& initial,
+                      char16_t* buffer, uint32_t maxChars, Overlapped* overlapped)
+{
+    auto request = std::make_shared<PendingRequest>(buffer, maxChars, overlapped);
+    rui::keyboard::Request keys;
+    keys.title = ToUtf8(title);
+    keys.description = ToUtf8(description);
+    keys.initial = ToUtf8(initial);
+    keys.maxLength = maxChars - 1;  // the buffer's terminator
+    keys.onDone = [request](std::optional<std::string> text) {
+        // The drawing thread: fill the game's buffer, then complete the request
+        // (the overlapped's result and event, or wake the blocked caller).
+        if (text)
+            request->Complete(ToUtf16(*text), SUCCESS);
+        else
+            request->Complete(ToUtf16(""), CANCELLED);
+    };
+    request->id = rui::keyboard::Post(std::move(keys));
+    return overlapped != nullptr ? IO_PENDING : request->Wait();
+}
+// The game cancelling its overlapped: rui::keyboard::Cancel(request->id).
+```
+
+Write into the game's memory and complete the request (set the result, signal the event,
+queue the completion) the way the host's other asynchronous system calls do; the only
+difference is that `onDone` runs on the drawing thread. With `maxLength` in characters, a
+UTF-16 buffer of `cchMaxText` holds the result for everything the keys type (all of it is
+in the Basic Multilingual Plane). If the game can't draw some characters (its font has
+ASCII only, say), ask for `Charset::Ascii`.
 
 ## API reference
 
@@ -229,6 +354,14 @@ registered key's value different, the framework runs the `OnChanged` hooks and s
   red under half), `ResetLows()`.
 - `HudRows()`, `Cards()`: for a page.
 
+### `rui/keyboard.h`
+
+- `Request { title, description, initial, placeholder, maxLength (characters), maxBytes,
+  charset, onDone(optional<string>) }`, `Charset` (Any, Ascii).
+- `Open(request)`, `Open(title, initial, maxLength, onDone)`: the drawing thread.
+  `Post(request)`, `Cancel(id)`: any thread, at the next frame. Each returns or takes an `Id`.
+- `IsOpen()`, `KeyCenter(key)` (for tests).
+
 ### `rui/gate.h`
 
 - `SetCapture` (`NewFrame` sets it), `SetToggleButtons`, `Captured`, `Releasing`,
@@ -237,14 +370,15 @@ registered key's value different, the framework runs the `OnChanged` hooks and s
 
 ### `rui/widgets.h`
 
-- Rows: `Selector`, `Slider`, `Toggle`, `Button`, `TextField`, `CustomRow` (a row of your
-  own drawing, such as a list entry), each with a `RowSpec { label, description, chip,
+- Rows: `Selector`, `Slider`, `Toggle`, `Button`, `TextField` (the on-screen keyboard when
+  edited from the pad; a `Charset`), `CustomRow` (a row of your own drawing, such as a list
+  entry), each with a `RowSpec { label, description, chip,
   disabledWhy }`. `Chip::Restart(pending)` ("Restart" / amber "Restart required"),
   `Chip::Note("Next level")`. A disabled row says why in the description strip and is
   skipped by up/down. Rows return true when they changed (Button: when pressed).
 - `GroupHeader`, `Card(title, right, color, content)`, `KeyValues`.
 - `InputMode` (Pad, Keys, Mouse: the last used), `CurrentInput`, `NavCursorShown`,
-  `DrawGlyph`, `DrawKeyCap`; `BeginRows`, `FocusedRow`, `CurrentRow`, `DescriptionLines`
+  `DrawGlyph` (A, B, X, Y, LB, RB, LT, RT, Start, Back, the D-pad's axes), `DrawKeyCap`; `BeginRows`, `FocusedRow`, `CurrentRow`, `DescriptionLines`
   (the panel's own use).
 
 ### `rui/style.h`
@@ -268,14 +402,15 @@ registered key's value different, the framework runs the `OnChanged` hooks and s
 | LB / RB | Shift+Tab / Tab | a sidebar item | previous / next page |
 | D-pad / left stick up, down | Up, Down | hover | previous / next row |
 | D-pad / left stick left, right | Left, Right | the arrows; drag a slider | change (repeats when held) |
-| A | Enter, Space | click | toggle, next option, press, edit |
+| A | Enter, Space | click | toggle, next option, press, edit (a text field from the pad: the on-screen keyboard, its own controls above) |
 | Y | Delete | right click | the row back to its default |
 
 ## Self-test
 
 `test/` builds the framework on its own against Dear ImGui, SDL3 and plume source folders,
 and runs a self-test that needs no GPU or window (settings file, gate, the panel built and
-driven frame by frame without a renderer):
+driven frame by frame without a renderer, the on-screen keyboard driven with made-up pad
+states, keys and clicks, a text field through it):
 
 ```
 cmake -S test -B build -G Ninja -DRUI_TEST_IMGUI_DIR=<imgui> -DRUI_TEST_SDL_DIR=<SDL> -DRUI_TEST_PLUME_DIR=<plume>

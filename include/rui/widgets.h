@@ -9,6 +9,7 @@
 // what the description strip and the footer describe (CurrentRow).
 #pragma once
 
+#include "keyboard.h"
 #include "style.h"
 
 #include <functional>
@@ -97,9 +98,14 @@ namespace rui
     bool Toggle(const RowSpec& spec, bool& value, bool defaultValue);
     // True when pressed.
     bool Button(const RowSpec& spec, ImWchar icon, std::string_view text);
-    // Text typed in place of the value (A, Enter or a click to edit, Enter
-    // or leaving the field to keep it); `shown` stands for an empty value.
-    bool TextField(const RowSpec& spec, std::string& value, size_t maxLength, std::string_view shown);
+    // Text typed in place of the value (Enter or a click to edit, Enter or
+    // leaving the field to keep it), at most `maxLength` bytes of UTF-8;
+    // `shown` stands for an empty value. Edited from the pad (A), it opens
+    // the on-screen keyboard (rui/keyboard.h) with the row's label and
+    // description, and the value changes on its Done. `charset` limits what
+    // either may type.
+    bool TextField(const RowSpec& spec, std::string& value, size_t maxLength, std::string_view shown,
+        keyboard::Charset charset = keyboard::Charset::Any);
     // A row of its own drawing (a list entry): `height` (720p) tall, focus
     // and hover drawn; `draw` gets the row's rectangle and whether it's
     // focused (the ring shows) or hovered. `info` is what the description
@@ -127,6 +133,10 @@ namespace rui
         RB,
         DpadVertical,
         DpadHorizontal,
+        LT,
+        RT,
+        Start,
+        Back,
     };
     float DrawGlyph(ImDrawList* draw, Glyph glyph, float x, float centerY);
     float DrawKeyCap(ImDrawList* draw, std::string_view key, float x, float centerY);
