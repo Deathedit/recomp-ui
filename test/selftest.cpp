@@ -316,6 +316,39 @@ int main(int argc, char** argv)
     key(ImGuiKey_Escape);
     Check(!result && !keyboard::IsOpen(), "Escape cancels");
 
+    // Digits: a phone's pad from 1. Right and down to 5, down twice to the
+    // bottom row's 0; the fourth digit doesn't fit; X, Y and RT do nothing.
+    const auto openDigits = [&](const char* initial) {
+        keyboard::Request digits;
+        digits.title = "Number";
+        digits.initial = initial;
+        digits.maxLength = 3;
+        digits.charset = keyboard::Charset::Digits;
+        digits.onDone = onDone;
+        keyboard::Open(std::move(digits));
+        frame();
+    };
+    openDigits("");
+    press(A);
+    press(DPAD_RIGHT);
+    press(DPAD_DOWN);
+    press(A);
+    press(DPAD_DOWN, 2);
+    press(X);
+    press(Y);
+    trigger(true);
+    press(A, 2);
+    press(START);
+    Check(is("150"), "digits: the pad, 0 in the bottom row, cut at maxLength, no space or shift");
+    // A physical keyboard types digits only; the 0 key clicked.
+    openDigits("9");
+    ImGui::GetIO().AddInputCharactersUTF8("a7 -");
+    frame();
+    const bool clickedZero = click("0");
+    key(ImGuiKey_Enter);
+    Check(clickedZero && is("970"), "digits: other characters dropped, the 0 key clicked");
+    ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+
     // Clicks.
     keyboard::Open("Mouse", "", 10, onDone);
     frame();

@@ -13,7 +13,7 @@
 // the panel does (rui/gate.h).
 //
 // The keys: letters (a digit row over QWERTY), symbols, and accented Latin
-// letters, all in the embedded IBM Plex Sans.
+// letters, all in the embedded IBM Plex Sans; for digits only, a phone's pad.
 #pragma once
 
 #include <imgui.h>
@@ -32,6 +32,7 @@ namespace rui::keyboard
     {
         Any,    // every key: ASCII, the accented letters, a few symbols (€ £ ¥ ° ...)
         Ascii,  // printable ASCII: no accent page, the other symbols greyed
+        Digits, // 0-9 on a phone's pad (a number, a PIN): no space, shift or pages
     };
 
     struct Request

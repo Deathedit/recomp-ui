@@ -25,16 +25,16 @@ namespace rui::keyboard
 {
     namespace
     {
-        // The box at 720p.
-        constexpr float BOX_WIDTH = 720.0f, BOX_ROUNDING = 14.0f, PAD = 22.0f;
+        // The box at 720p (its width is the board's).
+        constexpr float BOX_ROUNDING = 14.0f, PAD = 22.0f;
         constexpr float FIELD_HEIGHT = 52.0f, TABS_HEIGHT = 26.0f, FOOTER_HEIGHT = 46.0f;
         constexpr float KEY_HEIGHT = 50.0f, KEY_GAP = 6.0f, KEY_ROUNDING = 8.0f;
         constexpr float KEY_TEXT = 19.0f, FIELD_TEXT = 20.0f;
         constexpr float FADE_SECONDS = 0.12f, FLASH_SECONDS = 0.12f, FULL_SECONDS = 0.6f;
         constexpr double DOUBLE_TAP = 0.35, CAPS_HOLD = 0.5;
 
-        // A page's grid: four rows of ten keys, then the bottom row
-        // (BOTTOM), the same on every page.
+        // A page's grid (its board's rows and columns, four by ten at most),
+        // then the board's bottom row, the same on each of its pages.
         constexpr int COLUMNS = 10, GRID_ROWS = 4, ROWS = GRID_ROWS + 1;
         struct Page
         {
@@ -82,12 +82,19 @@ namespace rui::keyboard
                     { 0xD6, 0xD5, 0xD8, 0x152, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0x178 },
                     { 0x1E9E, 0xD0, 0xDE, 0x141, 0x10C, 0x118, 0x143, 0x15A, 0x160, 0x17D },
                 } },
+            // Digits: a phone's pad (its 0 is in the bottom row).
+            { "123",
+                {
+                    { '1', '2', '3' },
+                    { '4', '5', '6' },
+                    { '7', '8', '9' },
+                },
+                {} },
         };
-        constexpr int ACCENT_PAGE = 2;
 
         enum class Special
         {
-            Char,  // a grid key: types its character
+            Char,  // types its character
             Shift,
             Page,  // the next page
             Space,
@@ -99,15 +106,35 @@ namespace rui::keyboard
             Special special;
             float units;  // of a grid key's width
             const char* name;  // KeyCenter's
+            char32_t c = 0;    // a Char's
         };
-        constexpr BottomKey BOTTOM[] = {
+        constexpr BottomKey TEXT_BOTTOM[] = {
             { Special::Shift, 1.5f, "Shift" },
             { Special::Page, 1.5f, "Page" },
             { Special::Space, 4.0f, "Space" },
             { Special::Backspace, 1.5f, "Backspace" },
             { Special::Done, 1.5f, "Done" },
         };
-        constexpr int BOTTOM_COUNT = int(std::size(BOTTOM));
+        constexpr BottomKey DIGITS_BOTTOM[] = {
+            { Special::Backspace, 1.0f, "Backspace" },
+            { Special::Char, 1.0f, "0", '0' },
+            { Special::Done, 1.0f, "Done" },
+        };
+
+        // A charset's keys: its pages (into PAGES), their grid, the bottom
+        // row, the box's width at 720p and the key focused first.
+        struct Board
+        {
+            std::span<const int> pages;
+            int rows, columns;
+            std::span<const BottomKey> bottom;
+            float width;
+            int startRow, startCol;
+        };
+        constexpr int ALL_PAGES[] = { 0, 1, 2 }, ASCII_PAGES[] = { 0, 1 }, DIGIT_PAGES[] = { 3 };
+        constexpr Board TEXT_BOARD = { ALL_PAGES, GRID_ROWS, COLUMNS, TEXT_BOTTOM, 720.0f, 1, 0 };  // from q
+        constexpr Board ASCII_BOARD = { ASCII_PAGES, GRID_ROWS, COLUMNS, TEXT_BOTTOM, 720.0f, 1, 0 };
+        constexpr Board DIGITS_BOARD = { DIGIT_PAGES, 3, 3, DIGITS_BOTTOM, 480.0f, 0, 0 };
 
         struct Entry
         {
@@ -187,6 +214,8 @@ namespace rui::keyboard
         {
             if (c < 0x20 || c == 0x7F)
                 return false;
+            if (s_current->request.charset == Charset::Digits)
+                return c >= '0' && c <= '9';
             if (c < 0x7F)
                 return true;
             if (s_current->request.charset == Charset::Ascii || c < 0xA0 || c > 0xFFFF || (c >= 0xE000 && c <= 0xF8FF))
@@ -196,12 +225,22 @@ namespace rui::keyboard
 
         // ---- the keys ----
 
+        const Board& CurrentBoard()
+        {
+            switch (s_current ? s_current->request.charset : Charset::Any)
+            {
+            case Charset::Ascii:
+                return ASCII_BOARD;
+            case Charset::Digits:
+                return DIGITS_BOARD;
+            default:
+                return TEXT_BOARD;
+            }
+        }
+
         std::span<const int> Pages()
         {
-            static constexpr int ALL[] = { 0, 1, 2 }, ASCII[] = { 0, 1 };
-            if (s_current && s_current->request.charset == Charset::Ascii)
-                return ASCII;
-            return ALL;
+            return CurrentBoard().pages;
         }
 
         const Page& CurrentPage()
@@ -209,25 +248,47 @@ namespace rui::keyboard
             return PAGES[Pages()[size_t(s_page)]];
         }
 
+        // The grid's rows and the bottom one.
+        int Rows()
+        {
+            return CurrentBoard().rows + 1;
+        }
+
+        bool InGrid(int row)
+        {
+            return row < CurrentBoard().rows;
+        }
+
         int RowKeys(int row)
         {
-            return row < GRID_ROWS ? COLUMNS : BOTTOM_COUNT;
+            return InGrid(row) ? CurrentBoard().columns : int(CurrentBoard().bottom.size());
+        }
+
+        // The board has the key (Shift, Space: Y and X do nothing without it).
+        bool HasKey(Special special)
+        {
+            for (const BottomKey& key : CurrentBoard().bottom)
+            {
+                if (key.special == special)
+                    return true;
+            }
+            return false;
         }
 
         // A key's left edge and width, in key units.
         float KeyLeft(int row, int col)
         {
-            if (row < GRID_ROWS)
+            if (InGrid(row))
                 return float(col);
             float left = 0.0f;
             for (int i = 0; i < col; i++)
-                left += BOTTOM[i].units;
+                left += CurrentBoard().bottom[size_t(i)].units;
             return left;
         }
 
         float KeyUnits(int row, int col)
         {
-            return row < GRID_ROWS ? 1.0f : BOTTOM[col].units;
+            return InGrid(row) ? 1.0f : CurrentBoard().bottom[size_t(col)].units;
         }
 
         int KeyAt(int row, float column)
@@ -242,18 +303,22 @@ namespace rui::keyboard
 
         Special SpecialOf(int row, int col)
         {
-            return row < GRID_ROWS ? Special::Char : BOTTOM[col].special;
+            return InGrid(row) ? Special::Char : CurrentBoard().bottom[size_t(col)].special;
         }
 
-        char32_t KeyChar(const Page& page, int row, int col, bool shifted)
+        // A Char key's character (of the current page).
+        char32_t KeyChar(int row, int col, bool shifted)
         {
+            if (!InGrid(row))
+                return CurrentBoard().bottom[size_t(col)].c;
+            const Page& page = CurrentPage();
             const char32_t upper = page.upper[row][col];
             return shifted && upper != 0 ? upper : page.lower[row][col];
         }
 
         char32_t KeyChar(int row, int col)
         {
-            return KeyChar(CurrentPage(), row, col, s_shift || s_caps);
+            return KeyChar(row, col, s_shift || s_caps);
         }
 
         // ---- editing ----
@@ -344,9 +409,9 @@ namespace rui::keyboard
             s_text = Decode(s_current->request.initial);
             s_cursor = s_text.size();
             s_page = 0;
-            s_row = 1;
-            s_col = 0;
-            s_column = 0.5f;
+            s_row = CurrentBoard().startRow;
+            s_col = CurrentBoard().startCol;
+            s_column = KeyLeft(s_row, s_col) + KeyUnits(s_row, s_col) * 0.5f;
             s_shift = s_caps = s_shiftHeld = false;
             s_shiftPressed = -1.0;
             s_scroll = 0.0f;
@@ -435,10 +500,11 @@ namespace rui::keyboard
         {
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
             const bool description = !s_current->request.description.empty();
-            const float gridHeight = float(ROWS) * S(KEY_HEIGHT) + float(ROWS - 1) * S(KEY_GAP);
-            const float height = S(PAD) + S(20.0f) + (description ? S(4.0f + 18.0f) : 0.0f) + S(12.0f) + S(FIELD_HEIGHT) + S(12.0f) + S(TABS_HEIGHT) + S(12.0f) +
-                gridHeight + S(PAD) + S(FOOTER_HEIGHT);
-            const float width = S(BOX_WIDTH);
+            const bool tabs = Pages().size() > 1;  // one page: no tabs
+            const float gridHeight = float(Rows()) * S(KEY_HEIGHT) + float(Rows() - 1) * S(KEY_GAP);
+            const float height = S(PAD) + S(20.0f) + (description ? S(4.0f + 18.0f) : 0.0f) + S(12.0f) + S(FIELD_HEIGHT) + S(12.0f) +
+                (tabs ? S(TABS_HEIGHT) + S(12.0f) : 0.0f) + gridHeight + S(PAD) + S(FOOTER_HEIGHT);
+            const float width = S(CurrentBoard().width);
             Layout layout;
             layout.min = ImVec2(std::round(viewport->Pos.x + (viewport->Size.x - width) * 0.5f), std::round(viewport->Pos.y + (viewport->Size.y - height) * 0.5f));
             layout.max = ImVec2(layout.min.x + width, layout.min.y + height);
@@ -457,23 +523,26 @@ namespace rui::keyboard
             y += S(FIELD_HEIGHT) + S(12.0f);
 
             // The tabs, centred.
-            layout.tabsY = y + S(TABS_HEIGHT * 0.5f);
-            float tabsWidth = 0.0f;
-            for (const int page : Pages())
-                tabsWidth += TabWidth(PAGES[page].name) + S(6.0f);
-            float x = std::round((left + right - (tabsWidth - S(6.0f))) * 0.5f);
-            for (const int page : Pages())
+            if (tabs)
             {
-                const float tab = TabWidth(PAGES[page].name);
-                layout.tabs.emplace_back(ImVec2(x, y), ImVec2(x + tab, y + S(TABS_HEIGHT)));
-                x += tab + S(6.0f);
+                layout.tabsY = y + S(TABS_HEIGHT * 0.5f);
+                float tabsWidth = 0.0f;
+                for (const int page : Pages())
+                    tabsWidth += TabWidth(PAGES[page].name) + S(6.0f);
+                float x = std::round((left + right - (tabsWidth - S(6.0f))) * 0.5f);
+                for (const int page : Pages())
+                {
+                    const float tab = TabWidth(PAGES[page].name);
+                    layout.tabs.emplace_back(ImVec2(x, y), ImVec2(x + tab, y + S(TABS_HEIGHT)));
+                    x += tab + S(6.0f);
+                }
+                y += S(TABS_HEIGHT) + S(12.0f);
             }
-            y += S(TABS_HEIGHT) + S(12.0f);
 
             // The keys: a unit is a grid key's width and the gap after it.
             const float gap = S(KEY_GAP);
-            const float unit = (right - left + gap) / float(COLUMNS);
-            for (int row = 0; row < ROWS; row++)
+            const float unit = (right - left + gap) / float(CurrentBoard().columns);
+            for (int row = 0; row < Rows(); row++)
             {
                 const float top = y + float(row) * (S(KEY_HEIGHT) + gap);
                 for (int col = 0; col < RowKeys(row); col++)
@@ -491,24 +560,23 @@ namespace rui::keyboard
         void RecordCenters(const Layout& layout)
         {
             s_keyCenters.clear();
-            const Page& page = CurrentPage();
-            for (int row = 0; row < ROWS; row++)
+            for (int row = 0; row < Rows(); row++)
             {
                 for (int col = 0; col < RowKeys(row); col++)
                 {
                     const ImVec2 center((layout.keys[row][col][0].x + layout.keys[row][col][1].x) * 0.5f,
                         (layout.keys[row][col][0].y + layout.keys[row][col][1].y) * 0.5f);
-                    if (row < GRID_ROWS)
+                    if (InGrid(row))
                     {
                         std::string lower, upper;
-                        AppendUtf8(lower, KeyChar(page, row, col, false));
-                        AppendUtf8(upper, KeyChar(page, row, col, true));
+                        AppendUtf8(lower, KeyChar(row, col, false));
+                        AppendUtf8(upper, KeyChar(row, col, true));
                         s_keyCenters.emplace_back(lower, center);
                         if (upper != lower)
                             s_keyCenters.emplace_back(upper, center);
                     }
                     else
-                        s_keyCenters.emplace_back(BOTTOM[col].name, center);
+                        s_keyCenters.emplace_back(CurrentBoard().bottom[size_t(col)].name, center);
                 }
             }
         }
@@ -524,7 +592,7 @@ namespace rui::keyboard
         {
             if (rowStep != 0)
             {
-                s_row = (s_row + rowStep + ROWS) % ROWS;
+                s_row = (s_row + rowStep + Rows()) % Rows();
                 s_col = KeyAt(s_row, s_column);
             }
             if (colStep != 0)
@@ -578,7 +646,7 @@ namespace rui::keyboard
                 MoveFocus(0, 1);
 
             // Y: shift; held, caps lock.
-            if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false))
+            if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false) && HasKey(Special::Shift))
             {
                 PressShift();
                 s_shiftHeld = s_shift && !s_caps;
@@ -621,7 +689,7 @@ namespace rui::keyboard
                     return false;
                 }
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft, false))
+            if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft, false) && HasKey(Special::Space))
                 Insert(' ');
 
             // A physical keyboard.
@@ -639,7 +707,7 @@ namespace rui::keyboard
             // The mouse: keys, tabs, the caret.
             if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             {
-                for (int row = 0; row < ROWS; row++)
+                for (int row = 0; row < Rows(); row++)
                 {
                     for (int col = 0; col < RowKeys(row); col++)
                     {
@@ -815,7 +883,7 @@ namespace rui::keyboard
         {
             const std::span<const int> pages = Pages();
             const bool pad = CurrentInput() == InputMode::Pad;
-            for (size_t i = 0; i < pages.size(); i++)
+            for (size_t i = 0; i < layout.tabs.size(); i++)
             {
                 const auto& [min, max] = layout.tabs[i];
                 const bool current = int(i) == s_page;
@@ -848,8 +916,10 @@ namespace rui::keyboard
             case InputMode::Pad:
                 x += detail::Hint(draw, x, centerY, Glyph::A, "", "Type") + gap;
                 x += detail::Hint(draw, x, centerY, Glyph::B, "", s_text.empty() ? "Cancel" : "Delete") + gap;
-                x += detail::Hint(draw, x, centerY, Glyph::X, "", "Space") + gap;
-                x += detail::Hint(draw, x, centerY, Glyph::Y, "", s_caps ? "Caps off" : "Shift") + gap;
+                if (HasKey(Special::Space))
+                    x += detail::Hint(draw, x, centerY, Glyph::X, "", "Space") + gap;
+                if (HasKey(Special::Shift))
+                    x += detail::Hint(draw, x, centerY, Glyph::Y, "", s_caps ? "Caps off" : "Shift") + gap;
                 x += detail::Hint(draw, x, centerY, Glyph::LB, "", "Cursor") + gap;
                 x += detail::Hint(draw, x, centerY, Glyph::Start, "", "Done") + gap;
                 x += detail::Hint(draw, x, centerY, Glyph::Back, "", "Cancel") + gap;
@@ -899,7 +969,7 @@ namespace rui::keyboard
 
             DrawField(draw, layout);
             DrawTabs(draw, layout);
-            for (int row = 0; row < ROWS; row++)
+            for (int row = 0; row < Rows(); row++)
             {
                 for (int col = 0; col < RowKeys(row); col++)
                     DrawKey(draw, layout, row, col);

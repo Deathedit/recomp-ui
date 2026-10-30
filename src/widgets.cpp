@@ -32,10 +32,15 @@ namespace rui
         ImGuiID s_keyboardFor = 0;                  // the text field the on-screen keyboard types for
         std::optional<std::string> s_keyboardText;  // its Done, for the field's next frame
 
-        // InputText's filter for a TextField's charset.
+        // InputText's filters for a TextField's charset.
         int AsciiOnly(ImGuiInputTextCallbackData* data)
         {
             return data->EventChar < 0x20 || data->EventChar >= 0x7F ? 1 : 0;
+        }
+
+        int DigitsOnly(ImGuiInputTextCallbackData* data)
+        {
+            return data->EventChar < '0' || data->EventChar > '9' ? 1 : 0;
         }
 
         // Pressed, with key repeat, on the pad, the keyboard or the left stick.
@@ -556,10 +561,10 @@ namespace rui
             char buffer[64] = {};
             std::snprintf(buffer, sizeof(buffer), "%s", value.c_str());
             ImGui::PushID(int(row.id));
-            const bool ascii = charset == keyboard::Charset::Ascii;
+            const ImGuiInputTextCallback filter =
+                charset == keyboard::Charset::Ascii ? AsciiOnly : charset == keyboard::Charset::Digits ? DigitsOnly : nullptr;
             const bool entered = ImGui::InputText("##text", buffer, std::min(sizeof(buffer), maxLength + 1),
-                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll | (ascii ? ImGuiInputTextFlags_CallbackCharFilter : 0),
-                ascii ? AsciiOnly : nullptr);
+                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll | (filter ? ImGuiInputTextFlags_CallbackCharFilter : 0), filter);
             const bool finished = ImGui::IsItemDeactivated();
             ImGui::PopID();
             changed = value != buffer;
